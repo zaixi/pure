@@ -47,7 +47,7 @@ prompt_pure_check_cmd_exec_time() {
 	integer elapsed
 	(( elapsed = EPOCHSECONDS - ${prompt_pure_cmd_timestamp:-$EPOCHSECONDS} ))
 	typeset -g prompt_pure_cmd_exec_time=
-	(( elapsed > ${PURE_CMD_MAX_EXEC_TIME:-5} )) && {
+	(( elapsed > ${PURE_CMD_MAX_EXEC_TIME:-36000} )) && {
 		prompt_pure_human_time_to_var $elapsed "prompt_pure_cmd_exec_time"
 	}
 }
@@ -114,8 +114,7 @@ prompt_pure_preprompt_render() {
 	# Initialize the preprompt array.
 	local -a preprompt_parts
 
-	# Set the path.
-	preprompt_parts+=('%F{blue}%~%f')
+	preprompt_parts+=('${prompt_pure_state[username]}%F{blue}%~%f')
 
 	# Add git branch and dirty status info.
 	typeset -gA prompt_pure_vcs_info
@@ -127,8 +126,6 @@ prompt_pure_preprompt_render() {
 		preprompt_parts+=('%F{cyan}${prompt_pure_git_arrows}%f')
 	fi
 
-	# Username and machine, if applicable.
-	[[ -n $prompt_pure_state[username] ]] && preprompt_parts+=('${prompt_pure_state[username]}')
 	# Execution time.
 	[[ -n $prompt_pure_cmd_exec_time ]] && preprompt_parts+=('%F{yellow}${prompt_pure_cmd_exec_time}%f')
 
@@ -157,7 +154,6 @@ prompt_pure_preprompt_render() {
 
 	if [[ $1 == precmd ]]; then
 		# Initial newline, for spaciousness.
-		print
 	elif [[ $prompt_pure_last_prompt != $expanded_prompt ]]; then
 		# Redraw the prompt.
 		zle && zle .reset-prompt
@@ -532,6 +528,8 @@ prompt_pure_state_setup() {
 	# show username@host if logged in through SSH
 	[[ -n $ssh_connection ]] && username='%F{242}%n@%m%f'
 
+	username='%F{071}%n%f%F{071}@%m%f:%f'
+
 	# show username@host if root, with username in white
 	[[ $UID -eq 0 ]] && username='%F{white}%n%f%F{242}@%m%f'
 
@@ -554,7 +552,7 @@ prompt_pure_setup() {
 
 	if [[ -z $prompt_newline ]]; then
 		# This variable needs to be set, usually set by promptinit.
-		typeset -g prompt_newline=$'\n%{\r%}'
+		typeset -g prompt_newline='%{%}'
 	fi
 
 	zmodload zsh/datetime
@@ -585,7 +583,7 @@ prompt_pure_setup() {
 	PROMPT='%(12V.%F{242}%12v%f .)'
 
 	# prompt turns red if the previous command didn't exit with 0
-	PROMPT+='%(?.%F{magenta}.%F{red})${prompt_pure_state[prompt]}%f '
+	PROMPT+='%(?.%F{green}.%F{red})${prompt_pure_state[prompt]}%f '
 
 	# Store prompt expansion symbols for in-place expansion via (%). For
 	# some reason it does not work without storing them in a variable first.
