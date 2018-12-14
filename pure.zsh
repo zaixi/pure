@@ -23,35 +23,6 @@
 # \e[K  => clears everything after the cursor on the current line
 # \e[2K => clear everything on the current line
 
-
-# turns seconds into human readable time
-# 165392 => 1d 21h 56m 32s
-# https://github.com/sindresorhus/pretty-time-zsh
-prompt_pure_human_time_to_var() {
-	local human total_seconds=$1 var=$2
-	local days=$(( total_seconds / 60 / 60 / 24 ))
-	local hours=$(( total_seconds / 60 / 60 % 24 ))
-	local minutes=$(( total_seconds / 60 % 60 ))
-	local seconds=$(( total_seconds % 60 ))
-	(( days > 0 )) && human+="${days}d "
-	(( hours > 0 )) && human+="${hours}h "
-	(( minutes > 0 )) && human+="${minutes}m "
-	human+="${seconds}s"
-
-	# store human readable time in variable as specified by caller
-	typeset -g "${var}"="${human}"
-}
-
-# stores (into prompt_pure_cmd_exec_time) the exec time of the last command if set threshold was exceeded
-prompt_pure_check_cmd_exec_time() {
-	integer elapsed
-	(( elapsed = EPOCHSECONDS - ${prompt_pure_cmd_timestamp:-$EPOCHSECONDS} ))
-	typeset -g prompt_pure_cmd_exec_time=
-	(( elapsed > ${PURE_CMD_MAX_EXEC_TIME:-36000} )) && {
-		prompt_pure_human_time_to_var $elapsed "prompt_pure_cmd_exec_time"
-	}
-}
-
 prompt_pure_set_title() {
 	setopt localoptions noshwordsplit
 
@@ -92,8 +63,6 @@ prompt_pure_preexec() {
 		fi
 	fi
 
-	typeset -g prompt_pure_cmd_timestamp=$EPOCHSECONDS
-
 	# shows the current dir and executed command in the title while a process is active
 	prompt_pure_set_title 'ignore-escape' "$PWD:t: $2"
 
@@ -114,8 +83,6 @@ prompt_pure_preprompt_render() {
 	# Initialize the preprompt array.
 	local -a preprompt_parts
 
-	preprompt_parts+=('${prompt_pure_state[username]}%F{blue}%~%f')
-
 	# Add git branch and dirty status info.
 	typeset -gA prompt_pure_vcs_info
 	if [[ -n $prompt_pure_vcs_info[branch] ]]; then
@@ -126,24 +93,23 @@ prompt_pure_preprompt_render() {
 		preprompt_parts+=('%F{cyan}${prompt_pure_git_arrows}%f')
 	fi
 
-	# Execution time.
-	[[ -n $prompt_pure_cmd_exec_time ]] && preprompt_parts+=('%F{yellow}${prompt_pure_cmd_exec_time}%f')
-
-	local cleaned_ps1=$PROMPT
-	local -H MATCH MBEGIN MEND
-	if [[ $PROMPT = *$prompt_newline* ]]; then
-		# Remove everything from the prompt until the newline. This
-		# removes the preprompt and only the original PROMPT remains.
-		cleaned_ps1=${PROMPT##*${prompt_newline}}
+	if [[ $1 != precmd ]]; then
+		(( total=$EPOCHREALTIME-$start_time ))
+		if [[  (( $total > $PURE_GIT_TIMEOUT_MS)) ]];then
+			add-zsh-hook -d precmd prompt_pure_precmd
+			add-zsh-hook -d preexec prompt_pure_preexec
+			preprompt_parts=''
+		fi
 	fi
-	unset MATCH MBEGIN MEND
 
 	# Construct the new prompt with a clean preprompt.
 	local -ah ps1
 	ps1=(
-		${(j. .)preprompt_parts}  # Join parts, space separated.
-		$prompt_newline           # Separate preprompt and prompt.
-		$cleaned_ps1
+		${prompt_pure_state[username]}
+		${prompt_pure_state[dir]}
+		${preprompt_parts}  # Join parts, space separated.
+		${prompt_pure_state[newline]} # Separate preprompt and prompt.
+		${prompt_pure_state[prompt]}
 	)
 
 	PROMPT="${(j..)ps1}"
@@ -152,9 +118,7 @@ prompt_pure_preprompt_render() {
 	local expanded_prompt
 	expanded_prompt="${(S%%)PROMPT}"
 
-	if [[ $1 == precmd ]]; then
-		# Initial newline, for spaciousness.
-	elif [[ $prompt_pure_last_prompt != $expanded_prompt ]]; then
+	if [[ $prompt_pure_last_prompt != $expanded_prompt ]]; then
 		# Redraw the prompt.
 		zle && zle .reset-prompt
 	fi
@@ -163,9 +127,8 @@ prompt_pure_preprompt_render() {
 }
 
 prompt_pure_precmd() {
-	# check exec time and store it in a variable
-	prompt_pure_check_cmd_exec_time
-	unset prompt_pure_cmd_timestamp
+	# get hook start time
+	typeset -g start_time=$EPOCHREALTIME
 
 	# shows the full path in the title
 	prompt_pure_set_title 'expand-prompt' '%~'
@@ -173,20 +136,8 @@ prompt_pure_precmd() {
 	# preform async git dirty check and fetch
 	prompt_pure_async_tasks
 
-	# Check if we should display the virtual env, we use a sufficiently high
-	# index of psvar (12) here to avoid collisions with user defined entries.
-	psvar[12]=
-	# When VIRTUAL_ENV_DISABLE_PROMPT is empty, it was unset by the user and
-	# Pure should take back control.
-	if [[ -n $VIRTUAL_ENV ]] && [[ -z $VIRTUAL_ENV_DISABLE_PROMPT || $VIRTUAL_ENV_DISABLE_PROMPT = 12 ]]; then
-		psvar[12]="${VIRTUAL_ENV:t}"
-		export VIRTUAL_ENV_DISABLE_PROMPT=12
-	fi
-
-	# Make sure VIM prompt is reset.
-	prompt_pure_reset_prompt_symbol
-
 	# print the preprompt
+
 	prompt_pure_preprompt_render "precmd"
 
 	if [[ -n $ZSH_THEME ]]; then
@@ -473,22 +424,6 @@ prompt_pure_async_callback() {
 	unset prompt_pure_async_render_requested
 }
 
-prompt_pure_reset_prompt_symbol() {
-	prompt_pure_state[prompt]=${PURE_PROMPT_SYMBOL:-❯}
-}
-
-prompt_pure_update_vim_prompt_widget() {
-	setopt localoptions noshwordsplit
-	prompt_pure_state[prompt]=${${KEYMAP/vicmd/${PURE_PROMPT_VICMD_SYMBOL:-❮}}/(main|viins)/${PURE_PROMPT_SYMBOL:-❯}}
-	zle && zle .reset-prompt
-}
-
-prompt_pure_reset_vim_prompt_widget() {
-	setopt localoptions noshwordsplit
-	prompt_pure_reset_prompt_symbol
-	zle && zle .reset-prompt
-}
-
 prompt_pure_state_setup() {
 	setopt localoptions noshwordsplit
 
@@ -525,19 +460,81 @@ prompt_pure_state_setup() {
 		unset MATCH MBEGIN MEND
 	fi
 
+	username='%F{071}%n%f@%F{071}%m%f:'
+
 	# show username@host if logged in through SSH
 	[[ -n $ssh_connection ]] && username='%F{242}%n@%m%f'
 
-	username='%F{071}%n%f%F{071}@%m%f:%f'
-
 	# show username@host if root, with username in white
-	[[ $UID -eq 0 ]] && username='%F{white}%n%f%F{242}@%m%f'
+	[[ $UID -eq 0 ]] && username='%%F{red}%n%f@%F{071}%m%f:'
+
+	if [[ "$PURE_SHORT_DIR" == true ]]; then
+		dir='%F{blue}$(_fish_collapsed_pwd)%f '
+	else
+		dir='%F{blue}%~%f '
+	fi
+
+	## prompt turns red if the previous command didn't exit with 0
+	prompt='%(?.%F{green}.%F{red})❯%f '
+
+	if [[ "$PURE_NEW_LINE" == true ]]; then
+		# This variable needs to be set, usually set by promptinit.
+		newline=$'\n%{\r%}'
+	else
+		newline=''
+	fi
+
+	if [[ -n $PURE_GIT_TIMEOUT_MS ]]; then
+		PURE_GIT_TIMEOUT_MS=$(awk 'BEGIN{print '$PURE_GIT_TIMEOUT_MS'/10}')
+	else
+		PURE_GIT_TIMEOUT_MS=0.3
+	fi
 
 	typeset -gA prompt_pure_state
 	prompt_pure_state=(
 		username "$username"
-		prompt	 "${PURE_PROMPT_SYMBOL:-❯}"
+		dir      "$dir"
+		prompt	 "$prompt"
+		newline  "$newline"
 	)
+}
+
+function _fish_collapsed_pwd() {
+    local pwd="$1"
+    local home="$HOME"
+    local size=${#home}
+    [[ $# == 0 ]] && pwd="$PWD"
+    [[ -z "$pwd" ]] && return
+    if [[ "$pwd" == "/" ]]; then
+        echo "/"
+        return
+    elif [[ "$pwd" == "$home" ]]; then
+        echo "~"
+        return
+    fi
+    [[ "$pwd" == "$home/"* ]] && pwd="~${pwd:$size}"
+    if [[ -n "$BASH_VERSION" ]]; then
+        local IFS="/"
+        local elements=($pwd)
+        local length=${#elements[@]}
+        for ((i=0;i<length-1;i++)); do
+            local elem=${elements[$i]}
+            if [[ ${#elem} -gt 1 ]]; then
+                elements[$i]=${elem:0:1}
+            fi
+        done
+    else
+        local elements=("${(s:/:)pwd}")
+        local length=${#elements}
+        for i in {1..$((length-1))}; do
+            local elem=${elements[$i]}
+            if [[ ${#elem} > 1 ]]; then
+                elements[$i]=${elem[1]}
+            fi
+        done
+    fi
+    local IFS="/"
+    echo "${elements[*]}"
 }
 
 prompt_pure_setup() {
@@ -550,12 +547,6 @@ prompt_pure_setup() {
 	# initialized via promptinit.
 	setopt noprompt{bang,cr,percent,subst} "prompt${^prompt_opts[@]}"
 
-	if [[ -z $prompt_newline ]]; then
-		# This variable needs to be set, usually set by promptinit.
-		typeset -g prompt_newline='%{%}'
-	fi
-
-	zmodload zsh/datetime
 	zmodload zsh/zle
 	zmodload zsh/parameter
 
@@ -571,46 +562,6 @@ prompt_pure_setup() {
 	add-zsh-hook preexec prompt_pure_preexec
 
 	prompt_pure_state_setup
-
-	zle -N prompt_pure_update_vim_prompt_widget
-	zle -N prompt_pure_reset_vim_prompt_widget
-	if (( $+functions[add-zle-hook-widget] )); then
-		add-zle-hook-widget zle-line-finish prompt_pure_reset_vim_prompt_widget
-		add-zle-hook-widget zle-keymap-select prompt_pure_update_vim_prompt_widget
-	fi
-
-	# if a virtualenv is activated, display it in grey
-	PROMPT='%(12V.%F{242}%12v%f .)'
-
-	# prompt turns red if the previous command didn't exit with 0
-	PROMPT+='%(?.%F{green}.%F{red})${prompt_pure_state[prompt]}%f '
-
-	# Store prompt expansion symbols for in-place expansion via (%). For
-	# some reason it does not work without storing them in a variable first.
-	typeset -ga prompt_pure_debug_depth
-	prompt_pure_debug_depth=('%e' '%N' '%x')
-
-	# Compare is used to check if %N equals %x. When they differ, the main
-	# prompt is used to allow displaying both file name and function. When
-	# they match, we use the secondary prompt to avoid displaying duplicate
-	# information.
-	local -A ps4_parts
-	ps4_parts=(
-		depth 	  '%F{yellow}${(l:${(%)prompt_pure_debug_depth[1]}::+:)}%f'
-		compare   '${${(%)prompt_pure_debug_depth[2]}:#${(%)prompt_pure_debug_depth[3]}}'
-		main      '%F{blue}${${(%)prompt_pure_debug_depth[3]}:t}%f%F{242}:%I%f %F{242}@%f%F{blue}%N%f%F{242}:%i%f'
-		secondary '%F{blue}%N%f%F{242}:%i'
-		prompt 	  '%F{242}>%f '
-	)
-	# Combine the parts with conditional logic. First the `:+` operator is
-	# used to replace `compare` either with `main` or an ampty string. Then
-	# the `:-` operator is used so that if `compare` becomes an empty
-	# string, it is replaced with `secondary`.
-	local ps4_symbols='${${'${ps4_parts[compare]}':+"'${ps4_parts[main]}'"}:-"'${ps4_parts[secondary]}'"}'
-
-	# Improve the debug prompt (PS4), show depth by repeating the +-sign and
-	# add colors to highlight essential parts like file and function name.
-	PROMPT4="${ps4_parts[depth]} ${ps4_symbols}${ps4_parts[prompt]}"
 
 	unset ZSH_THEME  # Guard against Oh My Zsh themes overriding Pure.
 }
