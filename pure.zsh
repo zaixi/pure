@@ -463,7 +463,7 @@ prompt_pure_state_setup() {
 	username='%F{071}%n%f@%F{071}%m%f:'
 
 	# show username@host if logged in through SSH
-	[[ -n $ssh_connection ]] && username='%F{242}%n@%m%f'
+	[[ -n $ssh_connection ]] && username='%F{242}%n@%m%f:'
 
 	# show username@host if root, with username in white
 	[[ $UID -eq 0 ]] && username='%F{red}%n%f@%F{071}%m%f:'
